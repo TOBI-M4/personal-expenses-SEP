@@ -1,4 +1,4 @@
-const CACHE_NAME = "expense-tracker-cache-v1";
+const CACHE_NAME = "expense-tracker-cache-v2";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -21,25 +21,43 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
+  // Only handle GET requests
   if (event.request.method !== "GET") {
+    return;
+  }
+
+  // Only handle http/https requests
+  if (!event.request.url.startsWith("http")) {
+    return;
+  }
+
+  // Skip external APIs (like Supabase) to avoid caching dynamic database/auth requests
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) {
     return;
   }
 
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      const networkRequest = fetch(event.request)
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+
+      return fetch(event.request)
         .then((response) => {
-          if (response && response.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, response.clone());
-            });
+          if (!response || response.status !== 200 || response.type !== "basic") {
+            return response;
           }
+
+          // Clone response synchronously BEFORE returning
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache).catch(() => {});
+          });
 
           return response;
         })
         .catch(() => cachedResponse);
-
-      return cachedResponse || networkRequest;
     })
   );
 });
