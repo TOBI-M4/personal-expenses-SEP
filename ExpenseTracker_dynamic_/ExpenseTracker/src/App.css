@@ -1,0 +1,18 @@
+.App { text-align: left; }
+.input { width: 100%; padding: .625rem .75rem; border: 1px solid #d1d5db; border-radius: .5rem; background: white; color: #111827; outline: none; }
+.input:focus { border-color: #10b981; box-shadow: 0 0 0 2px rgba(16,185,129,.15); }
+.action-button { display: inline-flex; align-items: center; gap: .4rem; padding: .55rem .8rem; border: 1px solid #d1d5db; border-radius: .5rem; background: white; color: #374151; font-size: .875rem; font-weight: 600; }
+.action-button:hover { background: #f9fafb; }
+.icon-button { padding: .4rem; color: #6b7280; border-radius: .4rem; }
+.icon-button:hover { background: #f3f4f6; color: #2563eb; }
+.icon-left { position: absolute; left: .75rem; top: 50%; transform: translateY(-50%); width: 1rem; height: 1rem; color: #9ca3af; }
+.badge { display: inline-flex; align-items: center; border-radius: 999px; padding: .25rem .5rem; font-size: .75rem; font-weight: 600; }
+.panel { background: white; border: 1px solid #e5e7eb; border-radius: .75rem; padding: 1.25rem; }
+.section-title { font-weight: 600; color: #111827; margin-bottom: 1rem; }
+.setting-button { display: inline-flex; align-items: center; gap: .4rem; padding: .55rem .8rem; border: 1px solid #d1d5db; border-radius: .5rem; color: #4b5563; }
+.setting-button.selected { border-color: #10b981; background: #ecfdf5; color: #047857; }
+.dark .input, .dark .action-button, .dark .panel { background: #0f172a; color: #e5e7eb; border-color: #334155; }
+.dark .action-button:hover { background: #1e293b; }
+.dark .section-title { color: #f8fafc; }
+.dark .setting-button { border-color: #475569; color: #cbd5e1; background: #0f172a; }
+.dark .setting-button.selected { border-color: #10b981; background: #064e3b; color: #a7f3d0; }

@@ -1,0 +1,8 @@
+{
+  "appId": "com.expensetracker.app",
+  "appName": "Expense Tracker",
+  "webDir": "build",
+  "server": {
+    "androidScheme": "https"
+  }
+}
