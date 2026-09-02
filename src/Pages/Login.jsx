@@ -151,7 +151,7 @@ function Login({ onContinueAsGuest }) {
           {/* Bottom Security Note */}
           <div className="relative z-10 flex items-center gap-2 text-xs text-emerald-200/90 pt-4 border-t border-white/15">
             <ShieldCheck className="w-4 h-4 text-emerald-300 flex-shrink-0" />
-            <span>Encrypted & powered by Supabase Auth</span>
+            <span>Encrypted credentials with SHA-256 & Supabase DB</span>
           </div>
         </div>
 

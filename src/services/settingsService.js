@@ -1,20 +1,27 @@
 import { getSupabaseClient } from "../lib/supabaseClient";
+import { authService } from "./authService";
+
+function getEffectiveUserId(providedUserId) {
+  if (providedUserId) return providedUserId;
+  const currentUser = authService.getCurrentUser();
+  return currentUser?.id || null;
+}
 
 export const settingsService = {
   /**
-   * Fetch settings for current user from Supabase.
+   * Fetch settings for a specific user from Supabase.
    */
-  async getUserSettings() {
+  async getUserSettings(userId) {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error("Supabase is not configured.");
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    const effectiveUserId = getEffectiveUserId(userId);
+    if (!effectiveUserId) return null;
 
     const { data, error } = await supabase
       .from("user_settings")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("user_id", effectiveUserId)
       .maybeSingle();
 
     if (error) throw error;
@@ -28,17 +35,17 @@ export const settingsService = {
   },
 
   /**
-   * Update or insert settings for current user.
+   * Update or insert settings for a user.
    */
-  async updateUserSettings(settings) {
+  async updateUserSettings(settings, userId) {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error("Supabase is not configured.");
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("User must be signed in to save cloud settings.");
+    const effectiveUserId = getEffectiveUserId(userId);
+    if (!effectiveUserId) throw new Error("User must be signed in to save cloud settings.");
 
     const payload = {
-      user_id: user.id,
+      user_id: effectiveUserId,
       monthly_budget: Number(settings.monthlyBudget) || 0,
       theme: settings.theme || "light",
       currency: settings.currency || "Rs.",

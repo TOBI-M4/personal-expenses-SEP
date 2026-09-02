@@ -1,4 +1,4 @@
-const CACHE_NAME = "expense-tracker-cache-v2";
+const CACHE_NAME = "expense-tracker-cache-v3";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -31,33 +31,40 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Skip external APIs (like Supabase) to avoid caching dynamic database/auth requests
+  // Skip external APIs (like Supabase, fonts, etc.) to avoid caching dynamic database/auth requests
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) {
     return;
   }
 
+  // In development, skip service worker caching for hot-reloads and sockjs
+  if (url.pathname.includes("ws") || url.pathname.includes("sockjs-node") || url.pathname.includes("hot-update")) {
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-
-      return fetch(event.request)
-        .then((response) => {
-          if (!response || response.status !== 200 || response.type !== "basic") {
-            return response;
-          }
-
-          // Clone response synchronously BEFORE returning
-          const responseToCache = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache).catch(() => {});
-          });
-
+    fetch(event.request)
+      .then((response) => {
+        if (!response || response.status !== 200 || response.type !== "basic") {
           return response;
-        })
-        .catch(() => cachedResponse);
-    })
+        }
+
+        const responseToCache = response.clone();
+        caches.open(CACHE_NAME).then((cache) => {
+          cache.put(event.request, responseToCache).catch(() => {});
+        });
+
+        return response;
+      })
+      .catch(async () => {
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+        // If navigating to a route and offline, return cached root index.html
+        if (event.request.mode === "navigate") {
+          const indexCached = await caches.match("/index.html");
+          if (indexCached) return indexCached;
+        }
+        return new Response("Network error occurred", { status: 503, statusText: "Service Unavailable" });
+      })
   );
 });

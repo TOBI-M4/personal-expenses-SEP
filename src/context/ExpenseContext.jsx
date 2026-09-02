@@ -43,7 +43,7 @@ function loadInitialExpenses() {
 const DEFAULT_SETTINGS = { monthlyBudget: 0, theme: "light", currency: "Rs." };
 
 export function ExpenseProvider({ children }) {
-  const { isConfigured, isAuthenticated } = useAuth();
+  const { user, isConfigured, isAuthenticated } = useAuth();
 
   const [expenses, setExpenses] = useState(loadInitialExpenses);
   const [settings, setSettings] = useState(() =>
@@ -77,27 +77,27 @@ export function ExpenseProvider({ children }) {
     localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categoriesList));
   }, [categoriesList]);
 
-  // Fetch from Supabase when user authenticates or config changes
+  // Fetch from Supabase when user authenticates or user ID changes
   const fetchCloudData = useCallback(async () => {
-    if (!isAuthenticated || !isConfigured) return;
+    if (!isAuthenticated || !user?.id || !isConfigured) return;
 
     setSyncing(true);
     setSyncError(null);
 
     try {
-      // 1. Fetch Expenses
-      const cloudExpenses = await expenseService.getExpenses();
+      // 1. Fetch User's Expenses
+      const cloudExpenses = await expenseService.getExpenses(user.id);
       setExpenses(cloudExpenses);
 
-      // 2. Fetch Settings
-      const cloudSettings = await settingsService.getUserSettings();
+      // 2. Fetch User's Settings
+      const cloudSettings = await settingsService.getUserSettings(user.id);
       if (cloudSettings) {
         setSettings((prev) => ({ ...prev, ...cloudSettings }));
       }
 
-      // 3. Fetch Categories
+      // 3. Fetch Categories (Defaults + User Custom)
       try {
-        const cloudCats = await categoryService.getCategories();
+        const cloudCats = await categoryService.getCategories(user.id);
         if (cloudCats && cloudCats.length > 0) {
           setCategoriesList(cloudCats);
         }
@@ -110,17 +110,24 @@ export function ExpenseProvider({ children }) {
     } finally {
       setSyncing(false);
     }
-  }, [isAuthenticated, isConfigured]);
+  }, [isAuthenticated, user?.id, isConfigured]);
 
   useEffect(() => {
-    fetchCloudData();
-  }, [fetchCloudData]);
+    if (isAuthenticated && user?.id) {
+      fetchCloudData();
+    }
+  }, [isAuthenticated, user?.id, fetchCloudData]);
 
   // Realtime subscription for Supabase expenses
   useEffect(() => {
-    if (!isAuthenticated || !isConfigured) return;
+    if (!isAuthenticated || !user?.id || !isConfigured) return;
 
     const subscription = expenseService.subscribeToExpenses((payload) => {
+      // Only process updates for the current user
+      if (payload.new && payload.new.user_id && payload.new.user_id !== user.id) {
+        return;
+      }
+
       if (payload.eventType === "INSERT") {
         setExpenses((curr) => {
           if (curr.some((e) => e.id === payload.new.id)) return curr;
@@ -166,18 +173,17 @@ export function ExpenseProvider({ children }) {
     return () => {
       subscription?.unsubscribe?.();
     };
-  }, [isAuthenticated, isConfigured]);
+  }, [isAuthenticated, user?.id, isConfigured]);
 
   // Add Expense
   const addExpense = async (expenseData) => {
-    if (isAuthenticated && isConfigured) {
+    if (isAuthenticated && user?.id && isConfigured) {
       try {
-        const created = await expenseService.createExpense(expenseData);
+        const created = await expenseService.createExpense(expenseData, user.id);
         setExpenses((current) => [created, ...current.filter((e) => e.id !== created.id)]);
         return created;
       } catch (err) {
         console.error("Failed to create expense in Supabase:", err);
-        // Fallback to local
       }
     }
 
@@ -188,9 +194,9 @@ export function ExpenseProvider({ children }) {
 
   // Update Expense
   const updateExpense = async (id, updatedExpense) => {
-    if (isAuthenticated && isConfigured) {
+    if (isAuthenticated && user?.id && isConfigured) {
       try {
-        const saved = await expenseService.updateExpense(id, updatedExpense);
+        const saved = await expenseService.updateExpense(id, updatedExpense, user.id);
         setExpenses((current) =>
           current.map((expense) => (expense.id === id ? saved : expense))
         );
@@ -209,9 +215,9 @@ export function ExpenseProvider({ children }) {
 
   // Delete Expense
   const deleteExpense = async (id) => {
-    if (isAuthenticated && isConfigured) {
+    if (isAuthenticated && user?.id && isConfigured) {
       try {
-        await expenseService.deleteExpense(id);
+        await expenseService.deleteExpense(id, user.id);
       } catch (err) {
         console.error("Failed to delete from Supabase:", err);
       }
@@ -222,9 +228,9 @@ export function ExpenseProvider({ children }) {
 
   // Clear all expenses
   const clearExpenses = async () => {
-    if (isAuthenticated && isConfigured) {
+    if (isAuthenticated && user?.id && isConfigured) {
       try {
-        await expenseService.clearAllExpenses();
+        await expenseService.clearAllExpenses(user.id);
       } catch (err) {
         console.error("Failed to clear cloud expenses:", err);
       }
@@ -247,9 +253,9 @@ export function ExpenseProvider({ children }) {
       note: item.note || "",
     }));
 
-    if (isAuthenticated && isConfigured) {
+    if (isAuthenticated && user?.id && isConfigured) {
       try {
-        const imported = await expenseService.importExpenses(cleaned);
+        const imported = await expenseService.importExpenses(cleaned, user.id);
         setExpenses(imported);
         return;
       } catch (err) {
@@ -265,9 +271,9 @@ export function ExpenseProvider({ children }) {
     const updated = { ...settings, ...changes };
     setSettings(updated);
 
-    if (isAuthenticated && isConfigured) {
+    if (isAuthenticated && user?.id && isConfigured) {
       try {
-        await settingsService.updateUserSettings(updated);
+        await settingsService.updateUserSettings(updated, user.id);
       } catch (err) {
         console.error("Failed to save settings to Supabase:", err);
       }
@@ -276,9 +282,9 @@ export function ExpenseProvider({ children }) {
 
   // Add category
   const addCategory = async (catData) => {
-    if (isAuthenticated && isConfigured) {
+    if (isAuthenticated && user?.id && isConfigured) {
       try {
-        const created = await categoryService.createCategory(catData);
+        const created = await categoryService.createCategory(catData, user.id);
         setCategoriesList((curr) => [...curr, created]);
         return created;
       } catch (err) {
@@ -293,9 +299,9 @@ export function ExpenseProvider({ children }) {
 
   // Delete category
   const deleteCategory = async (id) => {
-    if (isAuthenticated && isConfigured) {
+    if (isAuthenticated && user?.id && isConfigured) {
       try {
-        await categoryService.deleteCategory(id);
+        await categoryService.deleteCategory(id, user.id);
       } catch (err) {
         console.error("Failed to delete category from Supabase:", err);
       }

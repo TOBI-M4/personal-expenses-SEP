@@ -1,15 +1,15 @@
 -- ==============================================================================
--- Supabase PostgreSQL Schema for Expense Tracker App
+-- Supabase PostgreSQL Schema for Expense Tracker App (Table-Based Authentication)
 -- ==============================================================================
 -- Description:
 --   Complete database schema tailored for Supabase backend with:
---   - User Settings / Profiles linked to auth.users
---   - Dynamic Categories (default system categories + custom user categories)
---   - Expenses table with all fields, validations, and constraints
---   - Row Level Security (RLS) policies for secure multi-tenant isolation
+--   - Custom `public.users` table for credentials storage & SHA-256 password hashes
+--   - `public.user_settings` table for monthly budgets, themes, currency preferences
+--   - `public.categories` table for 9 system defaults + user custom categories
+--   - `public.expenses` table for multi-tenant transactions linked to `public.users(id)`
+--   - Permissive Row Level Security (RLS) policies for anon key client operations
 --   - Automatic timestamp triggers (updated_at)
---   - Automatic new user initialization trigger (auth.users -> user_settings)
---   - Optimized indexes for fast dashboard queries and date/category filtering
+--   - High-performance query indexes for fast dashboard queries and date/category filtering
 --   - Default seed data matching frontend categories and colors
 -- ==============================================================================
 
@@ -29,10 +29,43 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ==============================================================================
--- 3. Table: `public.user_settings` (Profile & Preferences)
+-- 3. Table: `public.users` (Custom Credential & Profile Storage)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) NOT NULL,
+    password_hash TEXT NOT NULL,
+    name VARCHAR(100) DEFAULT '',
+    avatar_url TEXT DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Case-insensitive unique index on email
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON public.users (LOWER(email));
+
+-- Trigger for users updated_at
+DROP TRIGGER IF EXISTS trg_users_updated_at ON public.users;
+CREATE TRIGGER trg_users_updated_at
+    BEFORE UPDATE ON public.users
+    FOR EACH ROW
+    EXECUTE FUNCTION public.set_updated_at();
+
+-- Enable RLS for users with open policy for anon client
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow all operations on users" ON public.users;
+CREATE POLICY "Allow all operations on users"
+    ON public.users
+    FOR ALL
+    USING (true)
+    WITH CHECK (true);
+
+-- ==============================================================================
+-- 4. Table: `public.user_settings` (Profile & Preferences)
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS public.user_settings (
-    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID PRIMARY KEY,
     monthly_budget NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (monthly_budget >= 0),
     theme VARCHAR(20) NOT NULL DEFAULT 'light' CHECK (theme IN ('light', 'dark', 'system')),
     currency VARCHAR(10) NOT NULL DEFAULT 'Rs.',
@@ -40,43 +73,50 @@ CREATE TABLE IF NOT EXISTS public.user_settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Safely set foreign key constraint to public.users(id)
+DO $$ 
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'user_settings_user_id_fkey'
+    ) THEN
+        ALTER TABLE public.user_settings DROP CONSTRAINT user_settings_user_id_fkey;
+    END IF;
+    ALTER TABLE public.user_settings 
+        ADD CONSTRAINT user_settings_user_id_fkey 
+        FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+EXCEPTION
+    WHEN OTHERS THEN NULL;
+END $$;
+
 -- Trigger for user_settings updated_at
+DROP TRIGGER IF EXISTS trg_user_settings_updated_at ON public.user_settings;
 CREATE TRIGGER trg_user_settings_updated_at
     BEFORE UPDATE ON public.user_settings
     FOR EACH ROW
     EXECUTE FUNCTION public.set_updated_at();
 
--- Enable RLS for user_settings
+-- Enable RLS for user_settings with open policy
 ALTER TABLE public.user_settings ENABLE ROW LEVEL SECURITY;
 
--- Policies for user_settings
-CREATE POLICY "Users can view their own settings"
-    ON public.user_settings
-    FOR SELECT
-    USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Allow all operations on user_settings" ON public.user_settings;
+DROP POLICY IF EXISTS "Users can view their own settings" ON public.user_settings;
+DROP POLICY IF EXISTS "Users can insert their own settings" ON public.user_settings;
+DROP POLICY IF EXISTS "Users can update their own settings" ON public.user_settings;
+DROP POLICY IF EXISTS "Users can delete their own settings" ON public.user_settings;
 
-CREATE POLICY "Users can insert their own settings"
+CREATE POLICY "Allow all operations on user_settings"
     ON public.user_settings
-    FOR INSERT
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own settings"
-    ON public.user_settings
-    FOR UPDATE
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can delete their own settings"
-    ON public.user_settings
-    FOR DELETE
-    USING (auth.uid() = user_id);
+    FOR ALL
+    USING (true)
+    WITH CHECK (true);
 
 -- ==============================================================================
--- 4. Table: `public.categories` (System Defaults & Custom User Categories)
+-- 5. Table: `public.categories` (System Defaults & Custom User Categories)
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS public.categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE, -- NULL means system global category
+    user_id UUID,
     name VARCHAR(50) NOT NULL,
     color VARCHAR(20) NOT NULL DEFAULT '#6b7280',
     icon VARCHAR(50) DEFAULT 'Tag',
@@ -84,41 +124,47 @@ CREATE TABLE IF NOT EXISTS public.categories (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Safely set foreign key constraint to public.users(id)
+DO $$ 
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'categories_user_id_fkey'
+    ) THEN
+        ALTER TABLE public.categories DROP CONSTRAINT categories_user_id_fkey;
+    END IF;
+    ALTER TABLE public.categories 
+        ADD CONSTRAINT categories_user_id_fkey 
+        FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+EXCEPTION
+    WHEN OTHERS THEN NULL;
+END $$;
+
 -- Prevent duplicate category names for the same user or system default
 CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_name_unique 
     ON public.categories (COALESCE(user_id, '00000000-0000-0000-0000-000000000000'::uuid), LOWER(name));
 
--- Enable RLS for categories
+-- Enable RLS for categories with open policy
 ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
 
--- Policies for categories
-CREATE POLICY "Users can view system and their own categories"
-    ON public.categories
-    FOR SELECT
-    USING (user_id IS NULL OR user_id = auth.uid());
+DROP POLICY IF EXISTS "Allow all operations on categories" ON public.categories;
+DROP POLICY IF EXISTS "Users can view system and their own categories" ON public.categories;
+DROP POLICY IF EXISTS "Users can insert their own custom categories" ON public.categories;
+DROP POLICY IF EXISTS "Users can update their own custom categories" ON public.categories;
+DROP POLICY IF EXISTS "Users can delete their own custom categories" ON public.categories;
 
-CREATE POLICY "Users can insert their own custom categories"
+CREATE POLICY "Allow all operations on categories"
     ON public.categories
-    FOR INSERT
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own custom categories"
-    ON public.categories
-    FOR UPDATE
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can delete their own custom categories"
-    ON public.categories
-    FOR DELETE
-    USING (auth.uid() = user_id);
+    FOR ALL
+    USING (true)
+    WITH CHECK (true);
 
 -- ==============================================================================
--- 5. Table: `public.expenses` (Core Transaction Data)
+-- 6. Table: `public.expenses` (Core Transaction Data)
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS public.expenses (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+    user_id UUID NOT NULL,
     amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
     category VARCHAR(50) NOT NULL,
     category_id UUID REFERENCES public.categories(id) ON DELETE SET NULL,
@@ -131,65 +177,53 @@ CREATE TABLE IF NOT EXISTS public.expenses (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Safely set foreign key constraint to public.users(id)
+DO $$ 
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'expenses_user_id_fkey'
+    ) THEN
+        ALTER TABLE public.expenses DROP CONSTRAINT expenses_user_id_fkey;
+    END IF;
+    ALTER TABLE public.expenses 
+        ADD CONSTRAINT expenses_user_id_fkey 
+        FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+EXCEPTION
+    WHEN OTHERS THEN NULL;
+END $$;
+
 -- Trigger for expenses updated_at
+DROP TRIGGER IF EXISTS trg_expenses_updated_at ON public.expenses;
 CREATE TRIGGER trg_expenses_updated_at
     BEFORE UPDATE ON public.expenses
     FOR EACH ROW
     EXECUTE FUNCTION public.set_updated_at();
 
--- Enable RLS for expenses
+-- Enable RLS for expenses with open policy
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 
--- Policies for expenses
-CREATE POLICY "Users can view their own expenses"
-    ON public.expenses
-    FOR SELECT
-    USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Allow all operations on expenses" ON public.expenses;
+DROP POLICY IF EXISTS "Users can view their own expenses" ON public.expenses;
+DROP POLICY IF EXISTS "Users can insert their own expenses" ON public.expenses;
+DROP POLICY IF EXISTS "Users can update their own expenses" ON public.expenses;
+DROP POLICY IF EXISTS "Users can delete their own expenses" ON public.expenses;
 
-CREATE POLICY "Users can insert their own expenses"
+CREATE POLICY "Allow all operations on expenses"
     ON public.expenses
-    FOR INSERT
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own expenses"
-    ON public.expenses
-    FOR UPDATE
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can delete their own expenses"
-    ON public.expenses
-    FOR DELETE
-    USING (auth.uid() = user_id);
+    FOR ALL
+    USING (true)
+    WITH CHECK (true);
 
 -- ==============================================================================
--- 6. High-Performance Query Indexes
+-- 7. High-Performance Query Indexes
 -- ==============================================================================
+CREATE INDEX IF NOT EXISTS idx_users_email ON public.users(email);
 CREATE INDEX IF NOT EXISTS idx_expenses_user_id ON public.expenses(user_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON public.expenses(user_id, date DESC);
 CREATE INDEX IF NOT EXISTS idx_expenses_user_category ON public.expenses(user_id, category);
 CREATE INDEX IF NOT EXISTS idx_expenses_date ON public.expenses(date);
 CREATE INDEX IF NOT EXISTS idx_categories_user_id ON public.categories(user_id);
-
--- ==============================================================================
--- 7. Auto-Create User Settings on Auth Sign-Up Trigger
--- ==============================================================================
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER AS $$
-BEGIN
-    INSERT INTO public.user_settings (user_id, monthly_budget, theme, currency)
-    VALUES (NEW.id, 0.00, 'light', 'Rs.')
-    ON CONFLICT (user_id) DO NOTHING;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Trigger on auth.users table
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-    AFTER INSERT ON auth.users
-    FOR EACH ROW
-    EXECUTE FUNCTION public.handle_new_user();
 
 -- ==============================================================================
 -- 8. Seed Data: Default Categories Matching Frontend
@@ -208,7 +242,7 @@ VALUES
 ON CONFLICT DO NOTHING;
 
 -- ==============================================================================
--- 9. Analytical / Summary Views (Helper Views for Supabase API)
+-- 9. Analytical / Summary Views
 -- ==============================================================================
 
 -- View: Monthly Spending Summary per User

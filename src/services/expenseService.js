@@ -1,22 +1,35 @@
 import { getSupabaseClient } from "../lib/supabaseClient";
+import { authService } from "./authService";
+
+function getEffectiveUserId(providedUserId) {
+  if (providedUserId) return providedUserId;
+  const currentUser = authService.getCurrentUser();
+  return currentUser?.id || null;
+}
 
 export const expenseService = {
   /**
-   * Fetch all expenses for the current user from Supabase.
+   * Fetch all expenses for a specific user from Supabase.
    */
-  async getExpenses() {
+  async getExpenses(userId) {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error("Supabase is not configured.");
+
+    const effectiveUserId = getEffectiveUserId(userId);
+    if (!effectiveUserId) {
+      // Return empty if not authenticated
+      return [];
+    }
 
     const { data, error } = await supabase
       .from("expenses")
       .select("*")
+      .eq("user_id", effectiveUserId)
       .order("date", { ascending: false })
       .order("created_at", { ascending: false });
 
     if (error) throw error;
 
-    // Normalize field names to match frontend expectations (camelCase compatibility)
     return (data || []).map((item) => ({
       id: item.id,
       amount: Number(item.amount),
@@ -32,13 +45,19 @@ export const expenseService = {
   },
 
   /**
-   * Create a new expense.
+   * Create a new expense linked to a specific user.
    */
-  async createExpense(expense) {
+  async createExpense(expense, userId) {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error("Supabase is not configured.");
 
+    const effectiveUserId = getEffectiveUserId(userId);
+    if (!effectiveUserId) {
+      throw new Error("User must be signed in to save cloud expenses.");
+    }
+
     const payload = {
+      user_id: effectiveUserId,
       amount: Number(expense.amount),
       category: expense.category,
       category_id: expense.category_id || null,
@@ -75,12 +94,13 @@ export const expenseService = {
   },
 
   /**
-   * Update an existing expense by ID.
+   * Update an existing expense by ID for a user.
    */
-  async updateExpense(id, updates) {
+  async updateExpense(id, updates, userId) {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error("Supabase is not configured.");
 
+    const effectiveUserId = getEffectiveUserId(userId);
     const payload = {};
     if (updates.amount !== undefined) payload.amount = Number(updates.amount);
     if (updates.category !== undefined) payload.category = updates.category;
@@ -90,13 +110,12 @@ export const expenseService = {
     if (updates.paymentMethod !== undefined) payload.payment_method = updates.paymentMethod;
     if (updates.note !== undefined) payload.note = updates.note.trim();
 
-    const { data, error } = await supabase
-      .from("expenses")
-      .update(payload)
-      .eq("id", id)
-      .select()
-      .single();
+    let query = supabase.from("expenses").update(payload).eq("id", id);
+    if (effectiveUserId) {
+      query = query.eq("user_id", effectiveUserId);
+    }
 
+    const { data, error } = await query.select().single();
     if (error) throw error;
 
     return {
@@ -114,48 +133,54 @@ export const expenseService = {
   },
 
   /**
-   * Delete an expense by ID.
+   * Delete an expense by ID for a user.
    */
-  async deleteExpense(id) {
+  async deleteExpense(id, userId) {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error("Supabase is not configured.");
+
+    const effectiveUserId = getEffectiveUserId(userId);
+    let query = supabase.from("expenses").delete().eq("id", id);
+    if (effectiveUserId) {
+      query = query.eq("user_id", effectiveUserId);
+    }
+
+    const { error } = await query;
+    if (error) throw error;
+    return true;
+  },
+
+  /**
+   * Delete all expenses for a specific user.
+   */
+  async clearAllExpenses(userId) {
+    const supabase = getSupabaseClient();
+    if (!supabase) throw new Error("Supabase is not configured.");
+
+    const effectiveUserId = getEffectiveUserId(userId);
+    if (!effectiveUserId) throw new Error("Must be logged in to clear cloud expenses.");
 
     const { error } = await supabase
       .from("expenses")
       .delete()
-      .eq("id", id);
+      .eq("user_id", effectiveUserId);
 
     if (error) throw error;
     return true;
   },
 
   /**
-   * Delete all expenses for current user.
+   * Import / bulk insert expenses for a user.
    */
-  async clearAllExpenses() {
+  async importExpenses(items, userId) {
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error("Supabase is not configured.");
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Must be logged in to clear cloud expenses.");
-
-    const { error } = await supabase
-      .from("expenses")
-      .delete()
-      .eq("user_id", user.id);
-
-    if (error) throw error;
-    return true;
-  },
-
-  /**
-   * Import / bulk insert expenses.
-   */
-  async importExpenses(items) {
-    const supabase = getSupabaseClient();
-    if (!supabase) throw new Error("Supabase is not configured.");
+    const effectiveUserId = getEffectiveUserId(userId);
+    if (!effectiveUserId) throw new Error("Must be logged in to import cloud expenses.");
 
     const rows = items.map((item) => ({
+      user_id: effectiveUserId,
       amount: Number(item.amount) || 0,
       category: item.category || "Other",
       category_id: item.category_id || null,
